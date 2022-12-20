@@ -1,0 +1,325 @@
+from eli5.sklearn import PermutationImportance
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.utils import shuffle
+import multiprocessing as mp
+import os
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.preprocessing import StandardScaler
+from imblearn.over_sampling import SMOTE
+from sklearn.cluster import KMeans
+from imblearn import pipeline
+from sklearn.neighbors import NearestNeighbors
+from sklearn.svm import SVC
+
+def rand(df):
+    boot = np.random.choice(df.shape[0], df.shape[0], replace=True)
+    oob = [x for x in [i for i in range(0, df.shape[0])] if x not in boot]
+    df1=df.iloc[boot]
+    df2=df.iloc[oob]
+
+    defe = df1[df1["label"] == 1]
+    clean = df1[df1["label"] == 0]
+
+    defe1 = df2[df2["label"] == 1]
+    clean1 = df2[df2["label"] == 0]
+
+    if (defe.shape[0]!=0 and clean.shape[0]!=0 and defe1.shape[0]!=0 and clean1.shape[0]!=0):
+        return boot
+    else:
+        rand(df)
+
+    return boot
+def __populate(nnarray,n, y,y_label):
+    # T=0
+    number=0
+    for i in range(n):
+        label=y[nnarray[i]]
+        if(y_label==label):
+            number=number+1
+
+    return number
+
+def addoverlaplabe(df):
+    laplabel = np.zeros(shape=[df.shape[0], 1])
+    # print(df.columns)
+    df1=df
+    X = df1.iloc[:, :df1.shape[1] - 1].values
+    # print(X)
+    y = df1.iloc[:, df1.shape[1] - 1].values
+
+    nbrs1 = NearestNeighbors(n_neighbors=3)
+    nbrs1.fit(X)
+    nnarray1 = nbrs1.kneighbors(X)[1]
+    for i in range(nnarray1.shape[0]):
+        y_label = y[i]
+        num = __populate(nnarray1[i], 3, y, y_label)
+        if (num < 3 ):
+            laplabel[i] = 1
+    df1["laplabel"] = laplabel
+    return df1[df1["laplabel"]==0]
+
+def getclean(nnarray,n,x,y):
+    test_data=pd.DataFrame([])
+    for i in range(n):
+        if y[nnarray[i]]==0:
+            new_data = pd.DataFrame(x[nnarray[i] - 1:nnarray[i], :])
+            new_data["label"]=y[nnarray[i]]
+            # print(new_data)
+            test_data=pd.concat([test_data,new_data],axis=0)
+    return test_data
+
+def NCL(df):
+    X = df.iloc[:, :df.shape[1] - 1].values
+    y = df.iloc[:, df.shape[1] - 1].values
+    # print(y)
+    df_bug=df[df["label"] == 1]
+    df_clean=df[df["label"]==0]
+    # print(df_clean)
+    X_bug=df_bug.iloc[:,:df_bug.shape[1]-1].values
+    nbrs1 = NearestNeighbors(n_neighbors=3, algorithm="auto")
+    nbrs1.fit(X)
+    nnarray1 = nbrs1.kneighbors(X_bug)[1]
+    test_data=pd.DataFrame([])
+    for i in range(nnarray1.shape[0]):
+        new_data=getclean(nnarray1[i],3,X,y)
+        # print(new_data)
+        test_data=pd.concat([test_data,new_data],axis=0)
+
+    df_clean=pd.concat([df_clean,test_data],axis=0)
+    df1=df_clean.drop_duplicates(keep=False)
+    df2=pd.concat([df1,df_bug],axis=0)
+    return df2
+
+def calcluster(df):
+    k = int(df.shape[0] / 10)
+    x = df.iloc[:, :df.shape[1]-1]
+    kmeans = KMeans(n_clusters=k).fit(x)
+    list=kmeans.labels_
+    # print(k)
+    # print(list)
+    df["clusterlabel"] = list
+    return df
+
+def KMCL(df):
+    df_bug = df[df["label"] == 1]
+    df_clean = df[df["label"] == 0]
+    p=df_bug.shape[0]/df_clean.shape[0]
+    df_new = calcluster(df)
+    k = int(df.shape[0] /10)
+    df_train = pd.DataFrame([])
+    for i in range(k):
+        arr = df_new[df_new['clusterlabel'] == i]
+        n0 = arr[arr['label'] == 0].shape[0]
+        n1 = arr[arr['label'] == 1].shape[0]
+        # print(n0, n1)
+        if n0 == 0 or n1 / n0 >= p:
+            # if n0 == 0 or n1 / n0 >= 2:
+            data1 = arr[arr['label'] == 1]
+            df_train = pd.concat([df_train, data1], axis=0)
+        else:
+            data2 = arr[arr['label'] == 0]
+            df_train = pd.concat([df_train, data2], axis=0)
+    x_train=df_train.iloc[:,:df_train.shape[1]-2].values
+    y_train=df_train.iloc[:,df_train.shape[1]-2].values
+    return x_train,y_train
+
+def tunparameter(x_train,y_train):
+    pipe_rf = Pipeline([('clf', SVC(probability=True))])
+    param_range_C = [1]
+    param_range_kernel = ['linear']
+    param_range_gamma = [0.001, 0.0001]
+    param_grid = [{'clf__C': param_range_C, 'clf__kernel': param_range_kernel, 'clf__gamma': param_range_gamma}]
+    best_score = 0
+    # for k in range(5, 10, 5):
+    sm = SMOTE(k_neighbors=5)
+    x_res, y_res = sm.fit_resample(x_train, y_train)
+    gs = GridSearchCV(estimator=pipe_rf, param_grid=param_grid, n_jobs=8)
+    gs.fit(x_res, y_res)
+    # score = np.mean(gs.cv_results_['mean_test_score'])
+    # if (score > best_score):
+    #     best_gs = gs
+    return gs
+
+def tunoverlapparameter(x,y):
+    sm = SMOTE(k_neighbors=5)
+    x_res, y_res = sm.fit_resample(x, y)
+    df = pd.DataFrame(x_res)
+    df["label"] = y_res
+    df_new = addoverlaplabe(df)
+    x_new = df_new.iloc[:, :df_new.shape[1] - 2].values
+    y_new = df_new.iloc[:, df_new.shape[1] - 2].values
+
+    return x_new,y_new
+
+def PermutationImportance_(clf, X, y):
+    perm = PermutationImportance(clf, n_iter=5, random_state=1024, cv=5)
+
+    perm.fit(X, y)
+
+    # result_ = {'var': var
+    #     , 'feature_importances_': perm.feature_importances_
+    #     , 'feature_importances_std_': perm.feature_importances_std_}
+    # feature_importances_ = pd.DataFrame(result_, columns=['var', 'feature_importances_', 'feature_importances_std_'])
+    # feature_importances_ = feature_importances_.sort_values('feature_importances_', ascending=False)
+    return perm.feature_importances_
+
+if __name__ == '__main__':
+    g = os.walk(r"C:/gln/myclassoverlap/Data/new/gooddata/data_clean/aa/")
+    for path, dir_list, file_list in g:
+        for file_name in file_list:
+            s = os.path.join(path, file_name)
+            df = pd.read_csv(s)
+            print(file_name)
+            scaler = StandardScaler()
+            sm = SMOTE(k_neighbors=5)
+
+            feature_original = []
+            feature_remove = []
+            feature_SMOTE = []
+            feature_ovim = []
+            feature_imov = []
+            feature_NCL = []
+            feature_IKMCCA = []
+            # feature_separating = []
+
+            for t in range(40):
+                df=shuffle(df)
+                boot = rand(df)
+                train = df.iloc[boot]
+                oob = [x for x in [i for i in range(0, df.shape[0])] if x not in boot]  # testing data
+                test = df.iloc[oob]
+
+                x_train_original = train.iloc[:, :train.shape[1] - 3]
+                y_train_original = train.iloc[:, train.shape[1] - 2].values
+                # print(y_train_original)
+                var = x_train_original.columns.values
+
+                x_train_original = scaler.fit_transform(x_train_original)
+                # x_train_original = np.log1p(x_train_original)
+
+                train_original = pd.DataFrame(x_train_original)
+                train_original["label"] = y_train_original
+
+                x_train_SMOTE, y_train_SMOTE = sm.fit_resample(x_train_original, y_train_original)
+
+                # print(file)
+                # print(train_original)
+                train_NCL = NCL(train_original)
+                x_NCL = train_NCL.iloc[:, :train_NCL.shape[1] - 1].values
+                y_NCL = train_NCL.iloc[:, train_NCL.shape[1] - 1].values
+                # print(y_NCL)
+
+                # print(train_original)
+                x_IKMCCA, y_IKMCCA = KMCL(train_original)
+
+                train_original1 = pd.DataFrame(x_train_original)
+                train_original1["label"] = y_train_original
+                train_remove = addoverlaplabe(train_original1)
+                x_train_overlap = train_remove.iloc[:, :train_remove.shape[1] - 2].values
+                y_train_overlap = train_remove.iloc[:, train_remove.shape[1] - 2].values
+
+                SL = test['loc'].values
+                defnum = test['bugs'].values
+
+                x_test = test.iloc[:, :test.shape[1] - 3].values
+                y_test = test.iloc[:, test.shape[1] - 2].values
+                x_test = scaler.transform(x_test)
+                # x_test = np.log1p(x_test)
+
+                pipe_rf = Pipeline([('clf', SVC())])
+                param_range_C = [1]
+                param_range_kernel = ['linear', 'rbf']
+                param_range_gamma = [1e-3, 1e-4]
+                param_grid = [
+                    {'clf__C': param_range_C, 'clf__kernel': param_range_kernel, 'clf__gamma': param_range_gamma}]
+                # Perform grid search cross validation on the parameters listed in param_grid, using accuracy as the measure of fit and number of folds (CV) = 5
+                # gs = GridSearchCV(estimator=pipe_rf, param_grid=param_grid, scoring='roc_auc')
+                # gs.fit(x_train_original, y_train_original)
+                # best_rf_params = gs.best_params_
+                # clf = DecisionTreeClassifier(criterion=gs.best_params_['clf__criterion'],max_depth=gs.best_params_['clf__max_depth'],min_samples_leaf=gs.best_params_['clf__min_samples_leaf'])
+                # clf.fit(x_train_original, y_train_original)
+                # feature_importances_1 = PermutationImportance_(gs, x_test, y_test)
+                # feature_original.append(feature_importances_1)
+                # print(feature_original.shape)
+
+                # print(feature_importances_1)
+                # x_train_remove1,y_train_remove1=removedup(x_train_remove,y_train_remove)
+                # gs1 = GridSearchCV(estimator=pipe_rf, param_grid=param_grid)
+                # gs1.fit(x_train_overlap, y_train_overlap)
+                # best_rf_params = gs.best_params_
+                # clf1 = DecisionTreeClassifier(criterion=gs1.best_params_['clf__criterion'],max_depth=gs1.best_params_['clf__max_depth'],min_samples_leaf=gs1.best_params_['clf__min_samples_leaf'])
+
+                # clf1.fit(x_train_overlap, y_train_overlap)
+                # x_test2=scaler1.transform(x_test)
+                # feature_importances_2 = PermutationImportance_(gs1, x_test, y_test)
+                # print(feature_importances_2)
+                # feature_remove.append(feature_importances_2)
+
+                # gs2 = GridSearchCV(estimator=pipe_rf, param_grid=param_grid, scoring='roc_auc')
+                # gs2.fit(x_train_SMOTE, y_train_SMOTE)
+                # feature_importances_4 = PermutationImportance_(gs2, x_test, y_test)
+                # print(feature_importances_4)
+                # feature_SMOTE.append(feature_importances_4)
+
+                clf3 = tunparameter(x_train_overlap, y_train_overlap)
+                feature_importances_4 = PermutationImportance_(clf3, x_test, y_test)
+                print(feature_importances_4)
+                feature_ovim.append(feature_importances_4)
+
+                # gs4 = GridSearchCV(estimator=pipe_rf, param_grid=param_grid, scoring='roc_auc')
+                # x_train_imov, y_train_imov = tunoverlapparameter(x_train_original, y_train_original)
+                # gs4.fit(x_train_imov, y_train_imov)
+                # feature_importances_5 = PermutationImportance_(gs4, x_test, y_test)
+                # print(feature_importances_5)
+                # feature_imov.append(feature_importances_5)
+
+                # gs5 = GridSearchCV(estimator=pipe_rf, param_grid=param_grid, scoring='roc_auc')
+                # gs5.fit(x_NCL, y_NCL)
+                # clf5 = DecisionTreeClassifier(criterion=gs5.best_params_['clf__criterion'],
+                #                              max_depth=gs5.best_params_['clf__max_depth'],
+                #                              min_samples_leaf=gs5.best_params_['clf__min_samples_leaf'])
+                # clf5.fit(x_NCL, y_NCL)
+                # feature_importances_6 = PermutationImportance_(gs5, x_test, y_test)
+                # feature_NCL.append(feature_importances_6)
+
+                # gs6 = GridSearchCV(estimator=pipe_rf, param_grid=param_grid, scoring='roc_auc', cv=5)
+                # gs6.fit(x_IKMCCA, y_IKMCCA)
+                # clf6 = DecisionTreeClassifier(criterion=gs6.best_params_['clf__criterion'],
+                #                               max_depth=gs6.best_params_['clf__max_depth'],
+                #                               min_samples_leaf=gs6.best_params_['clf__min_samples_leaf'])
+                # clf6.fit(x_IKMCCA, y_IKMCCA)
+                # feature_importances_7 = PermutationImportance_(gs6, x_test, y_test)
+                # feature_IKMCCA.append(feature_importances_7)
+
+            # feature_original = pd.DataFrame(feature_original)
+            # print(feature_original.shape)
+            # feature_original.columns = var
+            # feature_remove = pd.DataFrame(feature_remove)
+            # feature_remove.columns = var
+            # feature_SMOTE = pd.DataFrame(feature_SMOTE)
+            # feature_SMOTE.columns = var
+            # feature_imov = pd.DataFrame(feature_imov)
+            # feature_imov.columns = var
+            feature_ovim = pd.DataFrame(feature_ovim)
+            feature_ovim.columns = var
+            # feature_NCL = pd.DataFrame(feature_NCL)
+            # feature_NCL.columns = var
+            # feature_IKMCCA = pd.DataFrame(feature_IKMCCA)
+            # feature_IKMCCA.columns = var
+            # ss = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/original/original_' + file_name
+            # feature_original.to_csv(ss, index=False)
+            # ss1 = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/remove/remove_' + file_name
+            # feature_remove.to_csv(ss1, index=False)
+            # ss2 = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/SMOTE/SMOTE_' + file_name
+            # feature_SMOTE.to_csv(ss2, index=False)
+            # ss4 = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/imov/imov_' + file_name
+            # feature_imov.to_csv(ss4, index=False)
+            # ss5 = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/NCL/NCL_' + file_name
+            # feature_NCL.to_csv(ss5, index=False)
+            # ss6 = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/IKMCCA/IKMCCA_' + file_name
+            # feature_IKMCCA.to_csv(ss6, index=False)
+            ss7 = 'C:/gln/myclassoverlap/imbalanceoverlap/result/feature/SVM/ovim/ovim2_' + file_name
+            feature_ovim.to_csv(ss7, index=False)
