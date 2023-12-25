@@ -3,4 +3,4 @@ Software developers often improve and guarantee software quality through intelli
 
 The following four tables are the p-values of the Wilcoxon signed-rank test for RQ1 and RQ2, where * indicates p≤0.05 and # indicates p>0.05. These results correspond to Figure 2 to Figure 5 in the paper.
 
-![](data/wilcoxon/Wilcoxon test Table 1-github.jpg)
+![]([data/wilcoxon/Wilcoxon test Table 1-github.jpg](https://github.com/OpenSELab/packages/blob/main/data/wilcoxon/Wilcoxon%20test%20Table%201-github.jpg)https://github.com/OpenSELab/packages/blob/main/data/wilcoxon/Wilcoxon%20test%20Table%201-github.jpg)
